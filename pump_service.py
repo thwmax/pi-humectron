@@ -30,8 +30,8 @@ button = Pin(15, Pin.IN, Pin.PULL_DOWN)
 uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5))
 
 # As the humidity increases, the voltage drops
-air_moisture_baseline = 65355
-water_moisture_baseline = 0
+air_moisture_baseline = 51600
+water_moisture_baseline = 25000
 intervals = 0
 
 
@@ -64,7 +64,7 @@ def calibrate():
         on_board_led.toggle()
         air_moisture_baseline = read_moisture_value()
         utime.sleep(0.05)
-    send_message_UART("AIR {}".format(air_moisture_baseline))
+    print("Air measure registered")
     on_board_led.value(1)
     utime.sleep(0.5)
 
@@ -72,10 +72,18 @@ def calibrate():
         on_board_led.toggle()
         water_moisture_baseline = read_moisture_value()
         utime.sleep(0.05)
-    send_message_UART("WATER {}".format(water_moisture_baseline))
+    print("Water measure registered")
     
     intervals = (air_moisture_baseline - water_moisture_baseline)/3
     print("range size:",intervals)
+    if intervals < 1000:
+        air_moisture_baseline = 51600
+        water_moisture_baseline = 25000
+        intervals = (air_moisture_baseline - water_moisture_baseline)/3
+        print("Invalid interval, using default values")
+    
+    send_message_UART("AIR {}".format(air_moisture_baseline))
+    send_message_UART("WATER {}".format(water_moisture_baseline))
     on_board_led.value(0)
 
 
@@ -117,13 +125,15 @@ def activate_pump():
 activity_led.value(1)
 relay_module.value(0)
 
+print("Calibrating Humetron...")
 # Calibrate air and water measures
 calibrate()
+print("Calibration finished")
 
 # Main loop
 while True:
     moisture_value, moisture_level = get_moisture_level()
     send_message_UART("M {} {}".format(moisture_value, LEVEL_MAP[moisture_level]))
-    if moisture_level <= NORMAL_SOIL:
+    if moisture_level < NORMAL_SOIL:
         activate_pump()
     utime.sleep(30)
