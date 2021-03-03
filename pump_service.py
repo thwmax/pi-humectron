@@ -1,12 +1,13 @@
-from machine import Pin, ADC
+"""
+Pi Watering system
+
+It uses the power of micropython and raspberry pi pico in order to activate
+a pump depending on the moisture level of the soil
+
+It sends activity data via UART to another device, so logging can be performed
+"""
+from machine import Pin, ADC, UART
 import utime
-
-
-# As the humidity increases, the voltage drops
-global air_moisture_baseline
-global water_moisture_baseline
-global intervals
-
 
 SUPER_WET_SOIL = 3
 WET_SOIL = 2
@@ -19,10 +20,27 @@ LEVEL_MAP = {
     NORMAL_SOIL: "NORMAL_SOIL",
     DRY_SOIL: "DRY_SOIL",
 }
-    
+
+
+activity_led = Pin(18, Pin.OUT)
 on_board_led = Pin(25, Pin.OUT)
 relay_module = Pin(16, Pin.OUT)
 moisture_sensor = ADC(Pin(26))
+button = Pin(15, Pin.IN, Pin.PULL_DOWN)
+uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5))
+
+# As the humidity increases, the voltage drops
+air_moisture_baseline = 65355
+water_moisture_baseline = 0
+intervals = 0
+
+
+def send_message_UART(msg):
+    """
+    Writes a message in uart serial bus
+    """
+    uart.write(msg + "-")
+    print(msg)
 
 
 def read_moisture_value(number_of_lectures = 1):
@@ -32,34 +50,42 @@ def read_moisture_value(number_of_lectures = 1):
     moisture_level = 0
     for i in range(0, number_of_lectures):
         moisture_level += moisture_sensor.read_u16()
-        utime.sleep(1)
-        on_board_led.toggle()
+        utime.sleep(0.1)
     
-    on_board_led.value(1)
     return moisture_level/number_of_lectures
 
 
 def calibrate():
-    utime.sleep(1)
     global air_moisture_baseline
-    air_moisture_baseline = read_moisture_value(number_of_lectures=3)
-    on_board_led.value(0)
-    utime.sleep(3)
-    on_board_led.value(1)
     global water_moisture_baseline
-    water_moisture_baseline = read_moisture_value(number_of_lectures=3)
-    on_board_led.value(1)
-    
     global intervals
-    intervals = (air_moisture_baseline - water_moisture_baseline)/3
     
-    print("Air moisture baseline:", air_moisture_baseline)
-    print("Water moisture baseline:", water_moisture_baseline)
-    print("intervals:",intervals)
+    while not button.value():
+        on_board_led.toggle()
+        air_moisture_baseline = read_moisture_value()
+        utime.sleep(0.05)
+    send_message_UART("AIR {}".format(air_moisture_baseline))
+    on_board_led.value(1)
+    utime.sleep(0.5)
+
+    while not button.value():
+        on_board_led.toggle()
+        water_moisture_baseline = read_moisture_value()
+        utime.sleep(0.05)
+    send_message_UART("WATER {}".format(water_moisture_baseline))
+    
+    intervals = (air_moisture_baseline - water_moisture_baseline)/3
+    print("range size:",intervals)
+    on_board_led.value(0)
 
 
 def get_moisture_level():
-    soil_moisture_value = read_moisture_value()
+    """
+    Moisture level is measured as voltage from the sensor, 
+    so as the humidity increases, the voltage drops, this method translates that 
+    measure into a constant range, that can be DRY, NORMAL, WET, SUPER WET
+    """
+    soil_moisture_value = read_moisture_value(number_of_lectures=3)
     if (
         soil_moisture_value > water_moisture_baseline
         and soil_moisture_value < (water_moisture_baseline + intervals)
@@ -80,23 +106,24 @@ def get_moisture_level():
 
 
 def activate_pump():
-    print("Pump activated at", utime.ticks_ms())
+    send_message_UART("PUMP_ON")
     relay_module.value(1)
     utime.sleep(5)
     relay_module.value(0)
-    print("Pump deactivated at", utime.ticks_ms())
+    send_message_UART("PUMP_OFF")
 
 
 # Init sensors
+activity_led.value(1)
 relay_module.value(0)
-on_board_led.value(1)
+
+# Calibrate air and water measures
+calibrate()
 
 # Main loop
-calibrate()
 while True:
     moisture_value, moisture_level = get_moisture_level()
-    print("Moisture value:", moisture_value)
-    print("Moisture level:", LEVEL_MAP[moisture_level])
+    send_message_UART("M {} {}".format(moisture_value, LEVEL_MAP[moisture_level]))
     if moisture_level <= NORMAL_SOIL:
         activate_pump()
-    utime.sleep(10)
+    utime.sleep(30)
